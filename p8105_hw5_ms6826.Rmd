@@ -6,6 +6,7 @@ date: "2024-11-09"
 
 ```{r}
 library(tidyverse)
+set.seed(1031)
 ```
 
 
@@ -42,5 +43,170 @@ sim_res |>
 ```
 As group size increases, the probability of duplicate birthdays also increases.
 
+## Problem 2
+
+First set the following design elements:
+Fix 𝑛=30
+Fix 𝜎=5
+Set 𝜇=0
+. Generate 5000 datasets from the model
+
+𝑥∼𝑁𝑜𝑟𝑚𝑎𝑙[𝜇,𝜎]
+
+For each dataset, save 𝜇̂  and the p-value arising from a test of 𝐻:𝜇=0
+ using 𝛼=0.05. Hint: to obtain the estimate and p-value, use broom::tidy to clean the output of t.test.
+
+```{r}
+sim_power= function(samp_size=30, true_mean=0, true_sd=5, alpha=0.05) {
+  sim_df=
+    tibble(
+      x=rnorm(samp_size, true_mean,true_sd)
+    )
+  
+   out_df=
+    sim_df |> 
+    summarize(
+      mu_hat=mean(x),
+      p_value=t.test(x, mu=0) |> broom::tidy() |> 
+     pull(p.value)
+    ) 
+    
+    
+   return(out_df)
+  
+}
+
+sim_results_df=
+  expand_grid(
+    iter= 1:5000
+  ) |> 
+  mutate(power_df=map(iter, sim_power, samp_size=30, true_mean=0)
+         ) |> 
+  unnest(power_df)
+print(sim_results_df)
+```
+Repeat the above for 𝜇={1,2,3,4,5,6}
+```{r}
+sim_final=
+  expand_grid(
+    true_mean=c(0,1,2,3,4,5,6),
+    iter=1:5000
+  ) |> 
+  mutate(samp_res=map(true_mean, sim_power, samp_size=30)) |> 
+  unnest(samp_res)
+print(sim_final)
+```
+
+Make a plot showing the average estimate of 𝜇̂ on the y axis and the true value of  𝜇on the x axis. 
+```{r}
+sim_final |> 
+  group_by(true_mean) |> 
+  summarize(avg_mu_hat=mean(mu_hat), .groups = 'drop') |> 
+  ggplot(aes(x=true_mean, y=avg_mu_hat))+
+  geom_point() +
+  geom_line() +
+  labs(
+    title = "Average Estimate of μ hat vs. True Value of μ",
+    x = "True Value of μ",
+    y = "Average Estimate of μ hat"
+  ) +
+  theme_minimal()
+```
+
+Make a second plot (or overlay on the first) the average estimate of 𝜇̂ only in samples for which the null was rejected on the y axis and the true value of 𝜇on the x axis. 
+
+```{r}
+sim_final |> 
+  filter(p_value<0.05) |> 
+  group_by(true_mean) |> 
+  summarize(avg_mu_hat_rejected=mean(mu_hat), .groups = 'drop') |> 
+  ggplot(aes(x=true_mean, y=avg_mu_hat_rejected))+
+  geom_point() +
+  geom_line() +
+  labs(
+    title = "Average Estimate of μ hat When the Null was Rejected",
+    x = "True Value of μ",
+    y = "Average Estimate of μ hat"
+  ) +
+  theme_minimal()
+
+```
+--No the sample average of mu hat across tests for which the null is rejected is NOT approximately equal to the true value of mu, and this is expected because any sample where the statistical test is  rejected means that the estimated mu was significantly different (with the significance level=0.05) than the true value of mu.
+
+## Problem 3
+
+
+Describe the raw data.
+---The raw data for each homicide includes an ID# that lists the first three letters of the city the homicide took place as well as its # on this list of 52,169 homicides.The raw data also includes the reported date of the homicide, the location of the homicide (city, state, lat, long), demographic information on the victim (e.g., first name, last name, race, age, etc.), as well as the disposition.
+
+Create a city_state variable (e.g. “Baltimore, MD”) and then summarize within cities to obtain the total number of homicides and the number of unsolved homicides (those for which the disposition is “Closed without arrest” or “Open/No arrest”).
+```{r}
+homicide_df=
+  read_csv("data/homicide-data.csv") 
+
+hom_df=
+homicide_df |> 
+  mutate(city_state=paste(city, state, sep=", ")) |> 
+  group_by(city_state) |> 
+  summarize(
+    tot_homicides=n(),
+    unsolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  )
+```
+
+
+For the city of Baltimore, MD, use the prop.test function to estimate the proportion of homicides that are unsolved; save the output of prop.test as an R object, apply the broom::tidy to this object and pull the estimated proportion and confidence intervals from the resulting tidy dataframe.
+
+```{r}
+balt_df=
+  prop.test(
+    x=hom_df |> filter(city_state=="Baltimore, MD") |> pull(unsolved_homicides), 
+    n=hom_df |> filter(city_state=="Baltimore, MD") |> pull(tot_homicides)) |> 
+  broom::tidy()
+
+balt_df |> 
+  knitr::kable() 
+
+balt_df |> 
+  pull(estimate) 
+balt_df |> 
+  pull(conf.low)
+balt_df |> 
+  pull(conf.high)
+```
+
+Now run prop.test for each of the cities in your dataset, and extract both the proportion of unsolved homicides and the confidence interval for each. Do this within a “tidy” pipeline, making use of purrr::map, purrr::map2, list columns and unnest as necessary to create a tidy dataframe with estimated proportions and CIs for each city.
+
+```{r}
+results_df=
+  hom_df |> 
+  mutate(
+    prop_table=map2(unsolved_homicides, tot_homicides, ~prop.test(x=.x, n=.y)),
+    tidy=map(prop_table, broom::tidy)) |> 
+  select(-prop_table) |> 
+  unnest(cols = c(tidy)) |> 
+  select(city_state, estimate, conf.low, conf.high) 
+
+print(results_df)
+
+```
+
+
+Create a plot that shows the estimates and CIs for each city – check out geom_errorbar for a way to add error bars based on the upper and lower limits. Organize cities according to the proportion of unsolved homicides.
+```{r}
+results_df |> 
+  arrange(estimate) |> 
+  mutate(city_state = factor(city_state, levels = city_state)) |> 
+  ggplot(aes(x=city_state, y=estimate))+
+  geom_point()+
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2)+
+  coord_flip()+
+    labs(
+    title = "Proportion of Unsolved Homicides by City",
+    x = "City",
+    y = "Estimated Proportion (with 95% CI)"
+  )
+
+```
 
 
